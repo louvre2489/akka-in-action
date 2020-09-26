@@ -1,15 +1,14 @@
 package com.goticks
 
 import scala.concurrent.Future
-
 import akka.actor.ActorSystem
 import akka.event.Logging
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.Http.ServerBinding
-import akka.stream.ActorMaterializer
 import akka.util.Timeout
+import com.typesafe.config.{Config, ConfigFactory}
 
-import com.typesafe.config.{ Config, ConfigFactory }
+import scala.util.{Failure, Success}
 
 object Main extends App
     with RequestTimeout {
@@ -22,16 +21,21 @@ object Main extends App
   implicit val ec = system.dispatcher  // bindingFuture.map requires an implicit ExecutionContext
 
   val api = new RestApi(system, requestTimeout(config)).routes // the RestApi provides a Route
- 
-  implicit val materializer = ActorMaterializer()  // bindAndHandle requires an implicit materializer
+
+  // 宣言する必要がなくなった
+//  implicit val materializer = ActorMaterializer()  // bindAndHandle requires an implicit materializer
+  // サーバーの起動方法が変更された
   val bindingFuture: Future[ServerBinding] =
-    Http().bindAndHandle(api, host, port) //Starts the HTTP server
- 
+    Http().newServerAt(host, port).bind(api) //Starts the HTTP server
+
   val log =  Logging(system.eventStream, "go-ticks")
   bindingFuture.map { serverBinding =>
     log.info(s"RestApi bound to ${serverBinding.localAddress} ")
-  }.onFailure { 
-    case ex: Exception =>
+    // onSuccess/onFailureはScala2.12で非推奨、2.13で廃止された
+  }.onComplete {
+    case Success(_) =>
+      // nothing to do
+    case Failure(ex) =>
       log.error(ex, "Failed to bind to {}:{}!", host, port)
       system.terminate()
   }

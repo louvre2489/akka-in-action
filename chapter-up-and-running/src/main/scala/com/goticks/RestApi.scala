@@ -15,7 +15,9 @@ class RestApi(system: ActorSystem, timeout: Timeout)
   implicit val requestTimeout = timeout
   implicit def executionContext = system.dispatcher
 
-  def createBoxOffice = system.actorOf(BoxOffice.props, BoxOffice.name)
+  // カッコがないと以下のエラーが発生するのでカッコを付ける
+  // method without a parameter list overrides a method with a single empty one
+  def createBoxOffice() = system.actorOf(BoxOffice.props, BoxOffice.name)
 }
 
 trait RestRoutes extends BoxOfficeApi

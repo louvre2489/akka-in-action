@@ -1,14 +1,63 @@
 package com.goticks
 
 import scala.concurrent.Future
-
 import akka.actor._
+import akka.actor.{ActorRef => AR}
+import akka.actor.typed.{Behavior, PostStop, Signal}
+import akka.actor.typed.scaladsl.AbstractBehavior
+import akka.actor.typed.scaladsl.ActorContext
+import akka.actor.typed.ActorRef
+import akka.actor.typed.scaladsl.Behaviors
 import akka.util.Timeout
+
+object BoxOfficeTyped {
+  def apply(): Behavior[Action] =
+    Behaviors.setup[Action](context => new BoxOfficeTyped(context))
+
+  trait Action
+  case class CreateEvent(name: String, tickets: Int, replyTo: ActorRef[EventResponse]) extends Action
+
+  case class Event(name: String, tickets: Int)
+  case class Events(events: Vector[Event])
+
+  sealed trait EventResponse
+  case class EventCreated(event: Event) extends EventResponse
+  case object EventExists               extends EventResponse
+}
+
+class BoxOfficeTyped(context: ActorContext[BoxOfficeTyped.Action]) extends AbstractBehavior[BoxOfficeTyped.Action](context) {
+
+  import BoxOfficeTyped._
+
+  def createTicketSeller(name: String): Behavior[TicketSellerTyped.Command] =
+    TicketSellerTyped.apply(name)
+
+  override def onMessage(msg: BoxOfficeTyped.Action): Behavior[BoxOfficeTyped.Action] = {
+    msg match {
+      case CreateEvent(name, tickets, replyTo) =>
+        def create() = {
+          val eventTickets = context.spawn(createTicketSeller(name), name)
+          val newTickets = (1 to tickets).map { ticketId =>
+            TicketSellerTyped.Ticket(ticketId)
+          }.toVector
+          eventTickets ! TicketSellerTyped.Add(newTickets)
+          replyTo ! EventCreated(Event(name, tickets))
+        }
+        context.child(name).fold(create())(_ => replyTo ! EventExists)
+        this
+    }
+  }
+
+  override def onSignal: PartialFunction[Signal, Behavior[BoxOfficeTyped.Action]] = {
+    case PostStop =>
+      context.log.info("Application stopped")
+      this
+  }
+}
 
 object BoxOffice {
   def props(implicit timeout: Timeout) = Props(new BoxOffice)
-  def name = "boxOffice"
-
+  def name                             = "boxOffice"
 
   case class CreateEvent(name: String, tickets: Int)
   case class GetEvent(name: String)
@@ -21,7 +70,7 @@ object BoxOffice {
 
   sealed trait EventResponse
   case class EventCreated(event: Event) extends EventResponse
-  case object EventExists extends EventResponse
+  case object EventExists               extends EventResponse
 
 }
 
@@ -29,37 +78,32 @@ class BoxOffice(implicit timeout: Timeout) extends Actor {
   import BoxOffice._
   import context._
 
-
   def createTicketSeller(name: String) =
     context.actorOf(TicketSeller.props(name), name)
 
   def receive = {
-    case CreateEvent(name, tickets) =>
-      def create() = {
-        val eventTickets = createTicketSeller(name)
-        val newTickets = (1 to tickets).map { ticketId =>
-          TicketSeller.Ticket(ticketId)
-        }.toVector
-        eventTickets ! TicketSeller.Add(newTickets)
-        sender() ! EventCreated(Event(name, tickets))
-      }
-      context.child(name).fold(create())(_ => sender() ! EventExists)
-
-
+//    case CreateEvent(name, tickets) =>
+//      def create() = {
+//        val eventTickets = createTicketSeller(name)
+//        val newTickets = (1 to tickets).map { ticketId =>
+//          TicketSeller.Ticket(ticketId)
+//        }.toVector
+//        eventTickets ! TicketSeller.Add(newTickets)
+//        sender() ! EventCreated(Event(name, tickets))
+//      }
+//      context.child(name).fold(create())(_ => sender() ! EventExists)
 
     case GetTickets(event, tickets) =>
       def notFound() = sender() ! TicketSeller.Tickets(event)
-      def buy(child: ActorRef) =
+      def buy(child: AR) =
         child.forward(TicketSeller.Buy(tickets))
 
       context.child(event).fold(notFound())(buy)
 
-
     case GetEvent(event) =>
-      def notFound() = sender() ! None
-      def getEvent(child: ActorRef) = child forward TicketSeller.GetEvent
+      def notFound()          = sender() ! None
+      def getEvent(child: AR) = child forward TicketSeller.GetEvent
       context.child(event).fold(notFound())(getEvent)
-
 
     case GetEvents =>
       import akka.pattern.ask
@@ -69,14 +113,13 @@ class BoxOffice(implicit timeout: Timeout) extends Actor {
         self.ask(GetEvent(child.path.name)).mapTo[Option[Event]]
       }
       def convertToEvents(f: Future[Iterable[Option[Event]]]) =
-        f.map(_.flatten).map(l=> Events(l.toVector))
+        f.map(_.flatten).map(l => Events(l.toVector))
 
       pipe(convertToEvents(Future.sequence(getEvents))) to sender()
 
-
     case CancelEvent(event) =>
-      def notFound() = sender() ! None
-      def cancelEvent(child: ActorRef) = child forward TicketSeller.Cancel
+      def notFound()             = sender() ! None
+      def cancelEvent(child: AR) = child forward TicketSeller.Cancel
       context.child(event).fold(notFound())(cancelEvent)
   }
 }

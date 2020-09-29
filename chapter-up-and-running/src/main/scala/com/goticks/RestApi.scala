@@ -28,21 +28,21 @@ trait RestRoutes extends BoxOfficeTypedApi with EventTypedMarshalling {
   import StatusCodes._
 
   def routes: Route =
-//    eventsRoute ~
+    eventsRoute ~
     eventRoute //~
 //      ticketsRoute
 
-  // def eventsRoute =
-  //   pathPrefix("events") {
-  //     pathEndOrSingleSlash {
-  //       get {
-  //         // GET /events
-  //         onSuccess(getEvents()) { events =>
-  //           complete(OK, events)
-  //         }
-  //       }
-  //     }
-  //   }
+  def eventsRoute =
+    pathPrefix("events") {
+      pathEndOrSingleSlash {
+        get {
+          // GET /events
+          onSuccess(getEvents()) { events =>
+            complete(OK, events)
+          }
+        }
+      }
+    }
 
   def eventRoute =
     pathPrefix("events" / Segment) { event =>
@@ -55,6 +55,8 @@ trait RestRoutes extends BoxOfficeTypedApi with EventTypedMarshalling {
               case BoxOfficeTyped.EventExists =>
                 val err = Error(s"$event event exists already.")
                 complete(BadRequest, err)
+              case _ => throw new RuntimeException  // BoxOfficeのレスポンス型を別Behaviorに分けたらこんなmatchしなくて済むんだけど・・・
+
             }
           }
         } // ~
@@ -93,14 +95,14 @@ trait RestRoutes extends BoxOfficeTypedApi with EventTypedMarshalling {
 trait BoxOfficeTypedApi {
   import BoxOfficeTyped._
 
-  def createBoxOfficeTyped(): Behavior[BoxOfficeTyped.Action]
+  def createBoxOfficeTyped(): Behavior[BoxOfficeTyped.EventRequest]
 
   implicit def executionContext: ExecutionContext
   implicit def requestTimeout: Timeout
 
 //  lazy val boxOffice = createBoxOfficeTyped()
 
-  val boxOffice             = ActorSystem(BoxOfficeTyped(), "boxOffice")
+  val boxOffice          = ActorSystem(BoxOfficeTyped(), "boxOffice")
   implicit val scheduler = boxOffice.scheduler
 
   def createEvent(event: String, nrOfTickets: Int): Future[EventResponse] =
@@ -108,6 +110,8 @@ trait BoxOfficeTypedApi {
       .ask(replyTo => CreateEvent(event, nrOfTickets, replyTo))
       .mapTo[EventResponse]
 
+  def getEvents(): Future[Events] =
+    boxOffice.ask(replyTo => GetEvents(replyTo)).mapTo[Events]
 }
 
 trait BoxOfficeApi {

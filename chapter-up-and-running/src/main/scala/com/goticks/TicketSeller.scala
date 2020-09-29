@@ -1,34 +1,41 @@
 package com.goticks
 
-import akka.actor.typed.Behavior
+import akka.actor.typed.{ActorRef, Behavior}
 import akka.actor.typed.scaladsl.AbstractBehavior
 import akka.actor.typed.scaladsl.ActorContext
 import akka.actor.typed.scaladsl.Behaviors
 import akka.actor.{Actor, PoisonPill, Props, ActorContext => AC}
+import com.goticks.BoxOfficeTyped.EventResponse
 import com.goticks.TicketSellerTyped.{Add, Ticket}
 
 object TicketSellerTyped {
-  def apply(name: String): Behavior[Command] =
-    Behaviors.setup[Command](context => new TicketSellerTyped(context, name))
+  def apply(name: String): Behavior[TicketRequest] =
+    Behaviors.setup[TicketRequest](context => new TicketSellerTyped(context, name))
 
-  trait Command
-  case class Add(tickets: Vector[Ticket]) extends Command
+  trait TicketRequest
+  case class Add(tickets: Vector[Ticket]) extends TicketRequest
+  case class GetEvent(replyTo: ActorRef[Option[BoxOfficeTyped.Event]]) extends TicketRequest
 
   case class Ticket(id: Int)
   case class Tickets(event: String,
                      entries: Vector[Ticket] = Vector.empty[Ticket])
 }
 
-class TicketSellerTyped(context: ActorContext[TicketSellerTyped.Command], event: String) extends AbstractBehavior[TicketSellerTyped.Command](context) {
+class TicketSellerTyped(context: ActorContext[TicketSellerTyped.TicketRequest], event: String) extends AbstractBehavior[TicketSellerTyped.TicketRequest](context) {
+
+  import TicketSellerTyped._
 
   var tickets = Vector.empty[Ticket]
 
-  override def onMessage(msg: TicketSellerTyped.Command): Behavior[TicketSellerTyped.Command] = {
+  override def onMessage(msg: TicketSellerTyped.TicketRequest): Behavior[TicketSellerTyped.TicketRequest] = {
     msg match {
       case Add(newTickets) => {
         tickets = tickets ++ newTickets
         this
       }
+      case GetEvent(replyTo) =>
+        replyTo ! Some(BoxOfficeTyped.Event(event, tickets.size))
+        this
     }
  }
 

@@ -1,15 +1,12 @@
 package com.goticks
 
-import akka.actor._
 import akka.actor.typed.scaladsl.AskPattern.Askable
-import akka.actor.{ ActorRef => AR }
 import akka.actor.{ ActorSystem => AS }
-import akka.actor.typed.{ ActorRef, ActorSystem, Behavior }
+import akka.actor.typed.{ ActorSystem, Behavior }
 import akka.http.scaladsl.marshallers.sprayjson.SprayJsonSupport._
 import akka.http.scaladsl.model.StatusCodes
 import akka.http.scaladsl.server.Directives._
 import akka.http.scaladsl.server._
-import akka.pattern.ask
 import akka.util.Timeout
 
 import scala.concurrent.{ ExecutionContext, Future }
@@ -18,19 +15,16 @@ class RestApi(system: AS, timeout: Timeout) extends RestRoutes {
   implicit val requestTimeout   = timeout
   implicit def executionContext = system.dispatcher
 
-  // カッコがないと以下のエラーが発生するのでカッコを付ける
-  // method without a parameter list overrides a method with a single empty one
-//  def createBoxOffice()      = system.actorOf(BoxOffice.props, BoxOffice.name)
-  def createBoxOfficeTyped() = BoxOfficeTyped()
+  def createBoxOffice() = BoxOffice()
 }
 
-trait RestRoutes extends BoxOfficeTypedApi with EventTypedMarshalling {
+trait RestRoutes extends BoxOfficeApi with EventTypedMarshalling {
   import StatusCodes._
 
   def routes: Route =
     eventsRoute ~
-    eventRoute //~
-//      ticketsRoute
+    eventRoute ~
+    ticketsRoute
 
   def eventsRoute =
     pathPrefix("events") {
@@ -51,15 +45,15 @@ trait RestRoutes extends BoxOfficeTypedApi with EventTypedMarshalling {
           // POST /events/:event
           entity(as[EventDescription]) { ed =>
             onSuccess(createEvent(event, ed.tickets)) {
-              case BoxOfficeTyped.EventCreated(event) => complete(Created, event)
-              case BoxOfficeTyped.EventExists =>
+              case BoxOffice.EventCreated(event) => complete(Created, event)
+              case BoxOffice.EventExists =>
                 val err = Error(s"$event event exists already.")
                 complete(BadRequest, err)
-              case _ => throw new RuntimeException  // BoxOfficeのレスポンス型を別Behaviorに分けたらこんなmatchしなくて済むんだけど・・・
+              case _ => throw new RuntimeException // BoxOfficeのレスポンス型を別Behaviorに分けたらこんなmatchしなくて済むんだけど・・・
 
             }
           }
-        }  ~
+        } ~
         get {
           // GET /events/:event
           onSuccess(getEvent(event)) {
@@ -75,34 +69,32 @@ trait RestRoutes extends BoxOfficeTypedApi with EventTypedMarshalling {
       }
     }
 
-// def ticketsRoute =
-//   pathPrefix("events" / Segment / "tickets") { event =>
-//     post {
-//       pathEndOrSingleSlash {
-//         // POST /events/:event/tickets
-//         entity(as[TicketRequest]) { request =>
-//           onSuccess(requestTickets(event, request.tickets)) { tickets =>
-//             if (tickets.entries.isEmpty) complete(NotFound)
-//             else complete(Created, tickets)
-//           }
-//         }
-//       }
-//     }
-//   }
+  def ticketsRoute =
+    pathPrefix("events" / Segment / "tickets") { event =>
+      post {
+        pathEndOrSingleSlash {
+          // POST /events/:event/tickets
+          entity(as[TicketRequest]) { request =>
+            onSuccess(requestTickets(event, request.tickets)) { tickets =>
+              if (tickets.entries.isEmpty) complete(NotFound)
+              else complete(Created, tickets)
+            }
+          }
+        }
+      }
+    }
 
 }
 
-trait BoxOfficeTypedApi {
-  import BoxOfficeTyped._
+trait BoxOfficeApi {
+  import BoxOffice._
 
-  def createBoxOfficeTyped(): Behavior[BoxOfficeTyped.EventRequest]
+  def createBoxOffice(): Behavior[BoxOffice.EventRequest]
 
   implicit def executionContext: ExecutionContext
   implicit def requestTimeout: Timeout
 
-//  lazy val boxOffice = createBoxOfficeTyped()
-
-  val boxOffice          = ActorSystem(BoxOfficeTyped(), "boxOffice")
+  val boxOffice          = ActorSystem(BoxOffice(), "boxOffice")
   implicit val scheduler = boxOffice.scheduler
 
   def createEvent(event: String, nrOfTickets: Int): Future[EventResponse] =
@@ -122,39 +114,9 @@ trait BoxOfficeTypedApi {
     boxOffice
       .ask(replyTo => CancelEvent(event, replyTo))
       .mapTo[Option[Event]]
-}
-
-trait BoxOfficeApi {
-  import BoxOffice._
-
-  def createBoxOffice(): AR
-
-  implicit def executionContext: ExecutionContext
-  implicit def requestTimeout: Timeout
-
-  lazy val boxOffice = createBoxOffice()
-
-  def createEvent(event: String, nrOfTickets: Int) =
-    boxOffice
-      .ask(CreateEvent(event, nrOfTickets))
-      .mapTo[EventResponse]
-
-  def getEvents() =
-    boxOffice.ask(GetEvents).mapTo[Events]
-
-  def getEvent(event: String) =
-    boxOffice
-      .ask(GetEvent(event))
-      .mapTo[Option[Event]]
-
-  def cancelEvent(event: String) =
-    boxOffice
-      .ask(CancelEvent(event))
-      .mapTo[Option[Event]]
 
   def requestTickets(event: String, tickets: Int) =
     boxOffice
-      .ask(GetTickets(event, tickets))
+      .ask(replyTo => GetTickets(event, tickets, replyTo))
       .mapTo[TicketSeller.Tickets]
 }
-//

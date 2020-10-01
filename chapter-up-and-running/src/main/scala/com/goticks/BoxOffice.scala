@@ -1,8 +1,7 @@
 package com.goticks
 
 import scala.concurrent.Future
-import akka.actor._
-import akka.actor.{ ActorRef => AR }
+
 import akka.actor.typed.{ Behavior, PostStop, Signal }
 import akka.actor.typed.scaladsl.AbstractBehavior
 import akka.actor.typed.scaladsl.ActorContext
@@ -14,15 +13,16 @@ import akka.util.Timeout
 import scala.concurrent.duration.DurationInt
 import scala.util.{ Failure, Success }
 
-object BoxOfficeTyped {
+object BoxOffice {
   def apply(): Behavior[EventRequest] =
-    Behaviors.setup[EventRequest](context => new BoxOfficeTyped(context))
+    Behaviors.setup[EventRequest](context => new BoxOffice(context))
 
   trait EventRequest
-  case class CreateEvent(name: String, tickets: Int, replyTo: ActorRef[EventResponse]) extends EventRequest
-  case class GetEvent(name: String, replyTo: ActorRef[Option[Event]])                  extends EventRequest
-  case class GetEvents(replyTo: ActorRef[EventResponse])                               extends EventRequest
-  case class CancelEvent(name: String, replyTo: ActorRef[Option[Event]])               extends EventRequest
+  case class CreateEvent(name: String, tickets: Int, replyTo: ActorRef[EventResponse])        extends EventRequest
+  case class GetEvent(name: String, replyTo: ActorRef[Option[Event]])                         extends EventRequest
+  case class GetEvents(replyTo: ActorRef[EventResponse])                                      extends EventRequest
+  case class GetTickets(event: String, tickets: Int, replyTo: ActorRef[TicketSeller.Tickets]) extends EventRequest
+  case class CancelEvent(name: String, replyTo: ActorRef[Option[Event]])                      extends EventRequest
 
   case class Event(name: String, tickets: Int)
 
@@ -32,34 +32,45 @@ object BoxOfficeTyped {
   case class Events(events: Vector[Event]) extends EventResponse
 }
 
-class BoxOfficeTyped(context: ActorContext[BoxOfficeTyped.EventRequest])
-    extends AbstractBehavior[BoxOfficeTyped.EventRequest](context) {
+class BoxOffice(context: ActorContext[BoxOffice.EventRequest])
+    extends AbstractBehavior[BoxOffice.EventRequest](context) {
 
-  import BoxOfficeTyped._
+  import BoxOffice._
 
-  private var ticketSellerActor = Map.empty[String, ActorRef[TicketSellerTyped.TicketRequest]]
+  private var ticketSellerActor = Map.empty[String, ActorRef[TicketSeller.TicketRequest]]
 
-  def createTicketSeller(name: String): Behavior[TicketSellerTyped.TicketRequest] =
-    TicketSellerTyped.apply(name)
+  def createTicketSeller(name: String): Behavior[TicketSeller.TicketRequest] =
+    TicketSeller.apply(name)
 
-  override def onMessage(msg: BoxOfficeTyped.EventRequest): Behavior[BoxOfficeTyped.EventRequest] = {
+  override def onMessage(msg: BoxOffice.EventRequest): Behavior[BoxOffice.EventRequest] = {
     msg match {
       case CreateEvent(name, tickets, replyTo) =>
         def create() = {
           val eventTickets = context.spawn(createTicketSeller(name), name)
           val newTickets = (1 to tickets).map { ticketId =>
-            TicketSellerTyped.Ticket(ticketId)
+            TicketSeller.Ticket(ticketId)
           }.toVector
           ticketSellerActor += name -> eventTickets
-          eventTickets ! TicketSellerTyped.Add(newTickets)
+          eventTickets ! TicketSeller.Add(newTickets)
           replyTo ! EventCreated(Event(name, tickets))
         }
         context.child(name).fold(create())(_ => replyTo ! EventExists)
         this
 
+      case GetTickets(event, tickets, replyTo) =>
+        def notFound() = replyTo ! TicketSeller.Tickets(event)
+        def buy(child: ActorRef[TicketSeller.Buy]) =
+          child ! TicketSeller.Buy(tickets, replyTo)
+
+        ticketSellerActor.get(event) match {
+          case None        => notFound()
+          case Some(actor) => buy(actor)
+        }
+        this
+
       case GetEvent(event, replyTo) =>
-        def notFound()                                                 = replyTo ! None
-        def getEvent(child: ActorRef[TicketSellerTyped.TicketRequest]) = child ! TicketSellerTyped.GetEvent(replyTo)
+        def notFound()                                            = replyTo ! None
+        def getEvent(child: ActorRef[TicketSeller.TicketRequest]) = child ! TicketSeller.GetEvent(replyTo)
 
         ticketSellerActor.get(event) match {
           case None        => notFound()
@@ -88,8 +99,8 @@ class BoxOfficeTyped(context: ActorContext[BoxOfficeTyped.EventRequest])
         this
 
       case CancelEvent(event, replyTo) =>
-        def notFound()                                                    = replyTo ! None
-        def cancelEvent(child: ActorRef[TicketSellerTyped.TicketRequest]) = child ! TicketSellerTyped.Cancel(replyTo)
+        def notFound()                                               = replyTo ! None
+        def cancelEvent(child: ActorRef[TicketSeller.TicketRequest]) = child ! TicketSeller.Cancel(replyTo)
 
         ticketSellerActor.get(event) match {
           case None        => notFound()
@@ -99,78 +110,9 @@ class BoxOfficeTyped(context: ActorContext[BoxOfficeTyped.EventRequest])
     }
   }
 
-  override def onSignal: PartialFunction[Signal, Behavior[BoxOfficeTyped.EventRequest]] = {
+  override def onSignal: PartialFunction[Signal, Behavior[BoxOffice.EventRequest]] = {
     case PostStop =>
       context.log.info("Application stopped")
       this
-  }
-}
-
-object BoxOffice {
-  def props(implicit timeout: Timeout) = Props(new BoxOffice)
-  def name                             = "boxOffice"
-
-  case class CreateEvent(name: String, tickets: Int)
-  case class GetEvent(name: String)
-  case object GetEvents
-  case class GetTickets(event: String, tickets: Int)
-  case class CancelEvent(name: String)
-
-  case class Event(name: String, tickets: Int)
-  case class Events(events: Vector[Event])
-
-  sealed trait EventResponse
-  case class EventCreated(event: Event) extends EventResponse
-  case object EventExists               extends EventResponse
-
-}
-
-class BoxOffice(implicit timeout: Timeout) extends Actor {
-  import BoxOffice._
-  import context._
-
-  def createTicketSeller(name: String) =
-    context.actorOf(TicketSeller.props(name), name)
-
-  def receive = {
-//    case CreateEvent(name, tickets) =>
-//      def create() = {
-//        val eventTickets = createTicketSeller(name)
-//        val newTickets = (1 to tickets).map { ticketId =>
-//          TicketSeller.Ticket(ticketId)
-//        }.toVector
-//        eventTickets ! TicketSeller.Add(newTickets)
-//        sender() ! EventCreated(Event(name, tickets))
-//      }
-//      context.child(name).fold(create())(_ => sender() ! EventExists)
-//
-//    case GetTickets(event, tickets) =>
-//      def notFound() = sender() ! TicketSeller.Tickets(event)
-//      def buy(child: AR) =
-//        child.forward(TicketSeller.Buy(tickets))
-//
-//      context.child(event).fold(notFound())(buy)
-//
-//    case GetEvent(event) =>
-//      def notFound()          = sender() ! None
-//      def getEvent(child: AR) = child forward TicketSeller.GetEvent
-//      context.child(event).fold(notFound())(getEvent)
-//
-//    case GetEvents =>
-//      import akka.pattern.ask
-//      import akka.pattern.pipe
-//
-//      def getEvents = context.children.map { child =>
-//        self.ask(GetEvent(child.path.name)).mapTo[Option[Event]]
-//      }
-//      def convertToEvents(f: Future[Iterable[Option[Event]]]) =
-//        f.map(_.flatten).map(l => Events(l.toVector))
-//
-//      pipe(convertToEvents(Future.sequence(getEvents))) to sender()
-
-    case CancelEvent(event) =>
-      def notFound()             = sender() ! None
-      def cancelEvent(child: AR) = child forward TicketSeller.Cancel
-      context.child(event).fold(notFound())(cancelEvent)
   }
 }

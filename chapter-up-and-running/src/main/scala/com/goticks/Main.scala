@@ -6,19 +6,18 @@ import akka.event.Logging
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.Http.ServerBinding
 import akka.util.Timeout
-import com.typesafe.config.{Config, ConfigFactory}
+import com.typesafe.config.{ Config, ConfigFactory }
 
-import scala.util.{Failure, Success}
+import scala.util.{ Failure, Success }
 
-object Main extends App
-    with RequestTimeout {
+object Main extends App with RequestTimeout {
 
-  val config = ConfigFactory.load() 
-  val host = config.getString("http.host") // Gets the host and a port from the configuration
-  val port = config.getInt("http.port")
+  val config = ConfigFactory.load()
+  val host   = config.getString("http.host") // Gets the host and a port from the configuration
+  val port   = config.getInt("http.port")
 
-  implicit val system = ActorSystem()  // ActorMaterializer requires an implicit ActorSystem
-  implicit val ec = system.dispatcher  // bindingFuture.map requires an implicit ExecutionContext
+  implicit val system = ActorSystem() // ActorMaterializer requires an implicit ActorSystem
+  implicit val ec     = system.dispatcher // bindingFuture.map requires an implicit ExecutionContext
 
   val api = new RestApi(system, requestTimeout(config)).routes // the RestApi provides a Route
 
@@ -28,17 +27,18 @@ object Main extends App
   val bindingFuture: Future[ServerBinding] =
     Http().newServerAt(host, port).bind(api) //Starts the HTTP server
 
-  val log =  Logging(system.eventStream, "go-ticks")
-  bindingFuture.map { serverBinding =>
-    log.info(s"RestApi bound to ${serverBinding.localAddress} ")
+  val log = Logging(system.eventStream, "go-ticks")
+  bindingFuture
+    .map { serverBinding =>
+      log.info(s"RestApi bound to ${serverBinding.localAddress} ")
     // onSuccess/onFailureはScala2.12で非推奨、2.13で廃止された
-  }.onComplete {
-    case Success(_) =>
+    }.onComplete {
+      case Success(_) =>
       // nothing to do
-    case Failure(ex) =>
-      log.error(ex, "Failed to bind to {}:{}!", host, port)
-      system.terminate()
-  }
+      case Failure(ex) =>
+        log.error(ex, "Failed to bind to {}:{}!", host, port)
+        system.terminate()
+    }
 }
 
 trait RequestTimeout {

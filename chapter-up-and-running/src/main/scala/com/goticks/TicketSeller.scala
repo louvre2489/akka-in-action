@@ -15,6 +15,7 @@ object TicketSellerTyped {
   trait TicketRequest
   case class Add(tickets: Vector[Ticket]) extends TicketRequest
   case class GetEvent(replyTo: ActorRef[Option[BoxOfficeTyped.Event]]) extends TicketRequest
+  case class Cancel(replyTo: ActorRef[Option[BoxOfficeTyped.Event]]) extends TicketRequest
 
   case class Ticket(id: Int)
   case class Tickets(event: String,
@@ -36,6 +37,10 @@ class TicketSellerTyped(context: ActorContext[TicketSellerTyped.TicketRequest], 
       case GetEvent(replyTo) =>
         replyTo ! Some(BoxOfficeTyped.Event(event, tickets.size))
         this
+
+      case Cancel(replyTo) =>
+        replyTo ! Some(BoxOfficeTyped.Event(event, tickets.size))
+        Behaviors.stopped
     }
  }
 

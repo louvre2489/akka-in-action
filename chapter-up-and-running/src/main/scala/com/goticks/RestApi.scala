@@ -59,19 +59,19 @@ trait RestRoutes extends BoxOfficeTypedApi with EventTypedMarshalling {
 
             }
           }
-        } // ~
-//        get {
-//          // GET /events/:event
-//          onSuccess(getEvent(event)) {
-//            _.fold(complete(NotFound))(e => complete(OK, e))
-//          }
-//        } ~
-//        delete {
-//          // DELETE /events/:event
-//          onSuccess(cancelEvent(event)) {
-//            _.fold(complete(NotFound))(e => complete(OK, e))
-//          }
-//        }
+        }  ~
+        get {
+          // GET /events/:event
+          onSuccess(getEvent(event)) {
+            _.fold(complete(NotFound))(e => complete(OK, e))
+          }
+        } ~
+        delete {
+          // DELETE /events/:event
+          onSuccess(cancelEvent(event)) {
+            _.fold(complete(NotFound))(e => complete(OK, e))
+          }
+        }
       }
     }
 
@@ -112,6 +112,16 @@ trait BoxOfficeTypedApi {
 
   def getEvents(): Future[Events] =
     boxOffice.ask(replyTo => GetEvents(replyTo)).mapTo[Events]
+
+  def getEvent(event: String) =
+    boxOffice
+      .ask(replyTo => GetEvent(event, replyTo))
+      .mapTo[Option[Event]]
+
+  def cancelEvent(event: String) =
+    boxOffice
+      .ask(replyTo => CancelEvent(event, replyTo))
+      .mapTo[Option[Event]]
 }
 
 trait BoxOfficeApi {

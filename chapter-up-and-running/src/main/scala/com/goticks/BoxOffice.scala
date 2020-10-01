@@ -2,8 +2,8 @@ package com.goticks
 
 import scala.concurrent.Future
 import akka.actor._
-import akka.actor.{ActorRef => AR}
-import akka.actor.typed.{Behavior, PostStop, Signal}
+import akka.actor.{ ActorRef => AR }
+import akka.actor.typed.{ Behavior, PostStop, Signal }
 import akka.actor.typed.scaladsl.AbstractBehavior
 import akka.actor.typed.scaladsl.ActorContext
 import akka.actor.typed.ActorRef
@@ -12,7 +12,7 @@ import akka.actor.typed.scaladsl.Behaviors
 import akka.util.Timeout
 
 import scala.concurrent.duration.DurationInt
-import scala.util.{Failure, Success}
+import scala.util.{ Failure, Success }
 
 object BoxOfficeTyped {
   def apply(): Behavior[EventRequest] =
@@ -22,6 +22,7 @@ object BoxOfficeTyped {
   case class CreateEvent(name: String, tickets: Int, replyTo: ActorRef[EventResponse]) extends EventRequest
   case class GetEvent(name: String, replyTo: ActorRef[Option[Event]])                  extends EventRequest
   case class GetEvents(replyTo: ActorRef[EventResponse])                               extends EventRequest
+  case class CancelEvent(name: String, replyTo: ActorRef[Option[Event]])               extends EventRequest
 
   case class Event(name: String, tickets: Int)
 
@@ -57,7 +58,7 @@ class BoxOfficeTyped(context: ActorContext[BoxOfficeTyped.EventRequest])
         this
 
       case GetEvent(event, replyTo) =>
-        def notFound()                                           = replyTo ! None
+        def notFound()                                                 = replyTo ! None
         def getEvent(child: ActorRef[TicketSellerTyped.TicketRequest]) = child ! TicketSellerTyped.GetEvent(replyTo)
 
         ticketSellerActor.get(event) match {
@@ -81,8 +82,18 @@ class BoxOfficeTyped(context: ActorContext[BoxOfficeTyped.EventRequest])
 
         val f = convertToEvents(Future.sequence(getEvents)(Vector, implicitly))
         f.onComplete {
-          case Success(s) => replyTo ! s
-          case Failure(e) => throw e
+          case Success(res) => replyTo ! res
+          case Failure(e)   => throw e
+        }
+        this
+
+      case CancelEvent(event, replyTo) =>
+        def notFound()                                                    = replyTo ! None
+        def cancelEvent(child: ActorRef[TicketSellerTyped.TicketRequest]) = child ! TicketSellerTyped.Cancel(replyTo)
+
+        ticketSellerActor.get(event) match {
+          case None        => notFound()
+          case Some(actor) => cancelEvent(actor)
         }
         this
     }
@@ -132,30 +143,30 @@ class BoxOffice(implicit timeout: Timeout) extends Actor {
 //        sender() ! EventCreated(Event(name, tickets))
 //      }
 //      context.child(name).fold(create())(_ => sender() ! EventExists)
-
-    case GetTickets(event, tickets) =>
-      def notFound() = sender() ! TicketSeller.Tickets(event)
-      def buy(child: AR) =
-        child.forward(TicketSeller.Buy(tickets))
-
-      context.child(event).fold(notFound())(buy)
-
-    case GetEvent(event) =>
-      def notFound()          = sender() ! None
-      def getEvent(child: AR) = child forward TicketSeller.GetEvent
-      context.child(event).fold(notFound())(getEvent)
-
-    case GetEvents =>
-      import akka.pattern.ask
-      import akka.pattern.pipe
-
-      def getEvents = context.children.map { child =>
-        self.ask(GetEvent(child.path.name)).mapTo[Option[Event]]
-      }
-      def convertToEvents(f: Future[Iterable[Option[Event]]]) =
-        f.map(_.flatten).map(l => Events(l.toVector))
-
-      pipe(convertToEvents(Future.sequence(getEvents))) to sender()
+//
+//    case GetTickets(event, tickets) =>
+//      def notFound() = sender() ! TicketSeller.Tickets(event)
+//      def buy(child: AR) =
+//        child.forward(TicketSeller.Buy(tickets))
+//
+//      context.child(event).fold(notFound())(buy)
+//
+//    case GetEvent(event) =>
+//      def notFound()          = sender() ! None
+//      def getEvent(child: AR) = child forward TicketSeller.GetEvent
+//      context.child(event).fold(notFound())(getEvent)
+//
+//    case GetEvents =>
+//      import akka.pattern.ask
+//      import akka.pattern.pipe
+//
+//      def getEvents = context.children.map { child =>
+//        self.ask(GetEvent(child.path.name)).mapTo[Option[Event]]
+//      }
+//      def convertToEvents(f: Future[Iterable[Option[Event]]]) =
+//        f.map(_.flatten).map(l => Events(l.toVector))
+//
+//      pipe(convertToEvents(Future.sequence(getEvents))) to sender()
 
     case CancelEvent(event) =>
       def notFound()             = sender() ! None
